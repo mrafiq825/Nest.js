@@ -519,3 +519,120 @@ nest g middleware <name>               # Generate Middleware
 * `--dry-run` — Runs command without making changes.
 * `--flat` — Generates files without creating a subfolder.
 * `--no-spec` — Generates files without spec (test) files.
+
+---
+
+# Chapter 8: Hackathon Backend Integration
+
+The application has been upgraded with a complete Hackathon Management API, role-based access control, global request validation/response transformation, and advanced security protections.
+
+## 1. Database Schema
+
+The database is built on PostgreSQL via Prisma. The following models and enums are implemented:
+
+* **UserRole Enum**: `PARTICIPANT`, `ADMIN`
+* **User**: Extended to support roles (defaults to `PARTICIPANT`) and relations:
+  * `hackathons`: One-to-many relationship mapping hackathons created by the user (as an `ADMIN`).
+  * `hackathonParticipants`: Many-to-many junction relationship mapping hackathons the user has joined.
+* **Hackathon**: Stores hackathon metadata:
+  * `startsAt`, `endsAt`: Date parameters defining registration windows.
+  * `isActive`: Boolean flag indicating if registrations are active.
+  * `authorId`: Link to the admin user who created it.
+* **HackathonParticipant**: Connects users to hackathons with a unique constraint on `(hackathonId, userId)`.
+
+---
+
+## 2. Better Auth Configuration
+
+Better Auth is configured to inject custom user properties. The `role` property has been added to user additional fields:
+```typescript
+user: {
+  additionalFields: {
+    role: {
+      type: 'string',
+      defaultValue: 'PARTICIPANT',
+      input: false,
+    },
+  },
+}
+```
+* Note: `input: false` prevents clients from sending their own role during registration. All signups default to `PARTICIPANT`.
+
+---
+
+## 3. Global Response Format
+
+A global `TransformInterceptor` interceptor formatting all HTTP 2xx responses into a unified structure is active:
+```json
+{
+  "statusCode": 200,
+  "message": "Custom response message or Success",
+  "data": { ... }
+}
+```
+Use the `@ResponseMessage('custom message')` decorator to override the response message value on specific controllers or endpoints.
+
+---
+
+## 4. Arcjet Security Guard
+
+An `ArcjetGuard` is registered globally. It dynamically analyzes every API request under the following policies:
+* **Bot Protection**: Allows verified search engines and previews (Slack, Discord) while rejecting script-based/anonymous clients.
+* **WAF Shield**: Flags SQL Injection, XSS, and directory traversal attempts.
+* **Rate Limiting**: Sliding window restriction (max 5 requests per 2 seconds, refilling continuously).
+
+---
+
+## 5. API Reference
+
+### User Module (`/user`)
+
+Requires authentication.
+
+| Method | Endpoint | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/user` | `ADMIN` | Fetch list of all registered users (ordered by newest). |
+| `GET` | `/user/:id` | `Any` | Retrieve profile of a user by ID. |
+| `GET` | `/user/profile` | `Any` | Retrieve profile of the logged-in session user. |
+| `GET` | `/user/protected-by-guard` | `Any` | Validate request against Arcjet guard policies. |
+| `GET` | `/user/protected-by-code` | `Any` | Validate request programmatically against Arcjet client. |
+
+### Hackathon Module (`/hackathon`)
+
+| Method | Endpoint | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/hackathon/create` | `ADMIN` | Create a new hackathon. Dates must be in the future. |
+| `GET` | `/hackathon` | `Anonymous` | List all hackathons. |
+| `GET` | `/hackathon/:id` | `Anonymous` | Fetch a single hackathon. |
+| `GET` | `/hackathon/:id/participants` | `Anonymous` | List participants joined in a hackathon. |
+| `PATCH`| `/hackathon/update/:id` | `ADMIN` | Update hackathon fields. |
+| `DELETE`| `/hackathon/remove/:id` | `ADMIN` | Remove a hackathon. |
+| `POST` | `/hackathon/:id/join` | `PARTICIPANT` | Join an active hackathon before its end date. |
+
+---
+
+## 6. How to Build & Run
+
+### Environment Setup
+Make sure the following variables are present in your `.env`:
+```bash
+DATABASE_URL=postgres://...
+ARCJET_KEY=ajkey_...
+BETTER_AUTH_SECRET=...
+BETTER_AUTH_URL=http://localhost:5001
+FRONTEND_URL=http://localhost:3000
+PORT=5001
+```
+
+### Database Initialization
+Run the migrations and generate the client:
+```bash
+npx prisma generate
+npx prisma migrate dev
+```
+
+### Compile & Run Dev Server
+```bash
+npm run dev
+```
+
